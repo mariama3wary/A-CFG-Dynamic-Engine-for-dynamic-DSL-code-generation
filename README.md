@@ -106,10 +106,10 @@ Keywords Dynamic, Python, code generation, ETL, In-memory data collections, comp
 ### DB Example 2
 ![DB Example 2](.assets/DB2.png)
 
-### GEE Example 1
+### GEE Example 3
 ![GEE Example 1](.assets/GEE1.png)
 
-### GEE Example 2
+### GEE Example 4
 ![GEE Example 2](.assets/GEE2.png)
 
 ### Line Plot Visualization Example
