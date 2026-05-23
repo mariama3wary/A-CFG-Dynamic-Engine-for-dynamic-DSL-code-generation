@@ -1,4 +1,8 @@
 from typing import Any, Tuple, Optional, Dict
+import tkinter as tk
+import tkinter.filedialog as filedialog
+import tkinter.messagebox as messagebox
+import tkinter.simpledialog as simpledialog
 import customtkinter as ctk
 from pandas import DataFrame
 
@@ -51,8 +55,29 @@ class TableResultFrame(ctk.CTkFrame):
         
         self.table = TableWidget(self)
         
-        # Button frame for visualization buttons
+        # Button frame for visualization buttons and table actions
         self.button_frame = ctk.CTkFrame(self, fg_color="transparent")
+
+        self.sort_button = ctk.CTkButton(
+            self.button_frame,
+            text="Sort",
+            command=self.sort_by_selected_column,
+            width=100,
+        )
+        self.delete_column_button = ctk.CTkButton(
+            self.button_frame,
+            text="Delete Column",
+            command=self.delete_selected_column,
+            width=120,
+            fg_color="#B03E3E",
+            hover_color="#862C2C",
+        )
+        self.compute_column_button = ctk.CTkButton(
+            self.button_frame,
+            text="Compute Column",
+            command=self.add_computed_column,
+            width=150,
+        )
         
         # Add "Show Visualization" button
         self.visualize_button = ctk.CTkButton(
@@ -62,6 +87,16 @@ class TableResultFrame(ctk.CTkFrame):
             width=150,
         )
         
+        # Add "Save CSV" button
+        self.save_csv_button = ctk.CTkButton(
+            self.button_frame,
+            text="Save CSV",
+            command=self.save_table_csv,
+            width=120,
+            fg_color="#3E6BB0",
+            hover_color="#2C5186"
+        )
+
         # Add "Show on Map" button with enhanced styling
         self.map_button = ctk.CTkButton(
             self.button_frame,
@@ -72,7 +107,9 @@ class TableResultFrame(ctk.CTkFrame):
             hover_color="#1f5a08"
         )
         
-        # Store GEE metadata
+        # Store table data for filtering and sorting
+        self.full_data: DataFrame = DataFrame()
+        self.current_view: DataFrame = DataFrame()
         self.gee_metadata: Optional[Dict] = None
         
         self.table_theme = ""
@@ -83,8 +120,12 @@ class TableResultFrame(ctk.CTkFrame):
         
         # Pack buttons side by side
         self.button_frame.pack(pady=5)
-        self.visualize_button.pack(side="left", padx=5)
-        self.map_button.pack(side="left", padx=5)
+        self.sort_button.pack(side="left", padx=4)
+        self.delete_column_button.pack(side="left", padx=4)
+        self.compute_column_button.pack(side="left", padx=4)
+        self.visualize_button.pack(side="left", padx=4)
+        self.save_csv_button.pack(side="left", padx=4)
+        self.map_button.pack(side="left", padx=4)
         
         # Initially hide the map button (will show only for GEE queries)
         self.map_button.pack_forget()
@@ -95,19 +136,23 @@ class TableResultFrame(ctk.CTkFrame):
             self.table_theme = "light"
 
     def set_table(self, data_frame: DataFrame) -> None:
-        self.table.set_data(data_frame)
+        self.full_data = data_frame.copy()
+        self.current_view = data_frame.copy()
+        self.table.set_data(self.current_view)
 
     def get_table(self) -> DataFrame:
-        return self.table.data
+        return self.table.get_data()
 
     def clear_table(self) -> None:
         self.table.reset_data()
+        self.full_data = DataFrame()
+        self.current_view = DataFrame()
         # Clear GEE metadata when table is cleared
         self.gee_metadata = None
         # Hide map button when table is cleared
         self.map_button.pack_forget()
 
-    def set_gee_metadata(self, metadata: Optional[Dict | list]) -> None:
+    def set_gee_metadata(self, metadata: Optional[Dict]) -> None:
         """Store Google Earth Engine query metadata and show/hide map button"""
         self.gee_metadata = metadata
         
