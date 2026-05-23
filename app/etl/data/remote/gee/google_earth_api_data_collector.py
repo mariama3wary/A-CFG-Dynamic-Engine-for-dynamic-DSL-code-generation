@@ -109,6 +109,55 @@ class GoogleEarthAPIDataCollector:
         weather_df = weather_df.round(5)
         return weather_df
 
+    def __load_generic_dataset(
+        self, dataset, start_date, end_date, longitude, latitude, scale
+    ):
+        """Load any Earth Engine dataset for a point, returning all bands."""
+        point = ee.Geometry.Point([longitude, latitude])
+
+        try:
+            collection = ee.ImageCollection(dataset).filterDate(start_date, end_date)
+            # Check if collection is empty. This triggers the API call which might fail if dataset is an Image.
+            if collection.limit(1).size().getInfo() == 0:
+                return pd.DataFrame()
+        except ee.EEException as e:
+            # Handle case where dataset is a single Image (e.g. OSU/GIMP/2000_IMAGERY_MOSAIC)
+            if "found 'Image'" in str(e):
+                collection = ee.ImageCollection([ee.Image(dataset)])
+            else:
+                raise e
+
+        # Handle heterogeneous collections like Sentinel-1 GRD (different polarization modes: HH/HV vs VV/VH)
+        if "COPERNICUS/S1" in dataset:
+            # For Sentinel-1, use mosaic to merge all images and handle heterogeneous bands
+            # This creates a composite of all images, which works even with different polarization modes
+            image = collection.mosaic()
+            # Convert single image back to collection for getRegion()
+            collection = ee.ImageCollection([image])
+        else:
+            # For other datasets, try standard band homogenization
+            try:
+                first_image_bands = ee.Image(collection.first()).bandNames()
+                collection = collection.select(first_image_bands)
+            except ee.EEException:
+                # If band selection fails, use the collection as-is
+                pass
+
+        data = collection.getRegion(point, scale).getInfo()
+        if not data or len(data) < 2:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data[1:], columns=data[0])
+        if "time" in df.columns:
+            df["date"] = df["time"].apply(lambda x: pd.to_datetime(x / 1000, unit="s").date())
+
+        # Reorder columns to put location and time at the end
+        cols = [c for c in df.columns if c not in ["time", "longitude", "latitude"]]
+        cols = cols + [c for c in ["time", "longitude", "latitude"] if c in df.columns]
+        df = df[cols]
+
+        return df
+
     def __load_data_from_dataset(
         self, dataset, start_date, end_date, latitude, longitude, scale
     ):

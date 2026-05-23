@@ -253,7 +253,33 @@ class TabContent(ctk.CTkFrame):
                     'is_area': False
                 }
 
+
+    def extract_gee_metadata(self, sql: str):
+        if not sql:
             return None
+
+        pattern = re.compile(
+            r'\{gee:([^|]+)\|([^|]+)\|([^|]+)\|([^|]+)\|([^|]+)\|([^|]+)\|([^}]+)\}',
+            re.IGNORECASE
+        )
+
+        matches = pattern.findall(sql)
+        if not matches:
+            return None
+
+        try:
+            datasets = []
+            for match in matches:
+                datasets.append({
+                    "project": match[0],
+                    "dataset": match[1],
+                    "start_date": match[2],
+                    "end_date": match[3],
+                    "longitude": float(match[4]),
+                    "latitude": float(match[5]),
+                    "scale": float(match[6]),
+                })
+            return datasets if datasets else None
         except Exception as e:
             print(f"Error extracting GEE metadata: {e}")
             return None

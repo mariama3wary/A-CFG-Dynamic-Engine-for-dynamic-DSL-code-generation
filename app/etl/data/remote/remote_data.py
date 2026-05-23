@@ -4,6 +4,7 @@ from app.etl.data.base_data_types import IExtractor, FieldPathBase
 from app.etl.data.remote.gee.google_earth_api_data_collector import (
     GoogleEarthAPIDataCollector,
 )
+import re
 
 
 class RemoteDataTypes(Enum):
@@ -15,49 +16,157 @@ class RemoteDataTypes(Enum):
 class GEEDataExtractor(FieldPathBase, IExtractor):
     def __init__(self, path: str):
         FieldPathBase.__init__(self, path)
-        self.path_parts = self.path.split("|")
-        self.gee_api_collector = GoogleEarthAPIDataCollector(self.path_parts[0])
+
+    def _parse_path(self, path: str):
+        path = path.strip()
+
+        # remove optional wrapper {}
+        if path.startswith("{") and path.endswith("}"):
+            path = path[1:-1]
+
+        # Split by pipe: project|dataset|start|end|lon|lat|scale
+        parts = path.split("|")
+
+        if len(parts) < 7:
+            raise ValueError(
+                f"Expected at least 7 parts "
+                f"(project|dataset|start|end|lon|lat|scale), "
+                f"got {len(parts)}: {parts}"
+            )
+
+        project = parts[0]
+        dataset_block = parts[1]
+        start = parts[2]
+        end = parts[3]
+        lon = parts[4]
+        lat = parts[5]
+        scale = parts[6]
+
+        # Support multiple datasets:
+        # [dataset1,dataset2,dataset3]
+        if dataset_block.startswith("[") and dataset_block.endswith("]"):
+            datasets = [
+                d.strip()
+                for d in dataset_block[1:-1].split(",")
+                if d.strip()
+            ]
+        else:
+            datasets = [dataset_block.strip()]
+
+        return project, datasets, start, end, lon, lat, scale
 
     def extract(self) -> DataFrame:
-        import re
+        full_path = self.path.strip()
 
-        # Check for AREA{...} syntax
-        full_path = self.path
-        area_match = re.search(r'AREA\(\((.+)\)\)', full_path)
+        # ---------------------------------------------------
+        # AREA((lon,lat),(lon,lat),...)
+        # ---------------------------------------------------
+        area_match = re.search(r"AREA\(\((.+)\)\)", full_path)
 
         if area_match:
-            # Extract everything before AREA{
-            before_area = full_path[:area_match.start()].strip('|')
-            parts = before_area.split('|')
-            # parts[0] = project
-            # parts[1] = dataset
-            # parts[2] = start_date
-            # parts[3] = end_date
+            # Extract everything before AREA(...)
+            before_area = full_path[: area_match.start()].strip("|")
 
-            # Parse coordinates from AREA{(x1,y1),(x2,y2),...}
+            (
+                project,
+                datasets,
+                start,
+                end,
+                _,
+                _,
+                _,
+            ) = self._parse_path(before_area)
+
+            collector = GoogleEarthAPIDataCollector(projectname=project)
+
+            # Parse polygon coordinates
             coord_str = area_match.group(1)
-            # Find all (lon, lat) pairs
-            pairs = re.findall(r'([\d.+-]+)\s*,\s*([\d.+-]+)', coord_str)
-            coords = [[float(lon), float(lat)] for lon, lat in pairs]
 
-            return self.gee_api_collector.collect_area(
-                dataset=parts[1],
-                start_date=parts[2],
-                end_date=parts[3],
-                coordinates=coords,
+            pairs = re.findall(
+                r"([\d.+-]+)\s*,\s*([\d.+-]+)",
+                coord_str,
             )
-        else:
-            # Check if we have enough parts before accessing them
-            if len(self.path_parts) < 7:
-                raise ValueError(
-                    f"Invalid path format. Expected 7 parts separated by '|', "
-                    f"but got {len(self.path_parts)}. Path: {self.path}"
+
+            coords = [
+                [float(lon), float(lat)]
+                for lon, lat in pairs
+            ]
+
+            dfs = []
+
+            for dataset in datasets:
+                df = collector.collect_area(
+                    dataset=dataset,
+                    start_date=start,
+                    end_date=end,
+                    coordinates=coords,
+                )
+                dfs.append(df)
+
+            if len(dfs) == 1:
+                return dfs[0]
+
+            # Auto join multiple area datasets
+            from app.etl.core import join
+
+            result = dfs[0]
+
+            for df in dfs[1:]:
+                result = join(
+                    result,
+                    df,
+                    "time",
+                    "time",
+                    how="outer",
                 )
 
-            return self.gee_api_collector.collect(
-                start_date=self.path_parts[2],
-                end_date=self.path_parts[3],
-                longitude=float(self.path_parts[5]),
-                latitude=float(self.path_parts[4]),
-                scale=float(self.path_parts[6]),
+            return result
+
+        # ---------------------------------------------------
+        # NORMAL POINT EXTRACTION
+        # ---------------------------------------------------
+        (
+            project,
+            datasets,
+            start,
+            end,
+            lon,
+            lat,
+            scale,
+        ) = self._parse_path(full_path)
+
+        collector = GoogleEarthAPIDataCollector(projectname=project)
+
+        dfs = []
+
+        for dataset in datasets:
+            df = collector.collect(
+                satellite=dataset,
+                start_date=start,
+                end_date=end,
+                longitude=float(lon),
+                latitude=float(lat),
+                scale=float(scale),
             )
+
+            dfs.append(df)
+
+        # Single dataset
+        if len(dfs) == 1:
+            return dfs[0]
+
+        # Auto join multiple datasets
+        from app.etl.core import join
+
+        result = dfs[0]
+
+        for df in dfs[1:]:
+            result = join(
+                result,
+                df,
+                "time",
+                "time",
+                how="outer",
+            )
+
+        return result
